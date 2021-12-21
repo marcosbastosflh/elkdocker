@@ -1,0 +1,93 @@
+version: '2.2'
+services:
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:7.16.0
+    container_name: APM01
+    restart: unless-stopped
+    depends_on:
+      - elasticsearch
+      - kibana
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
+    cap_drop: ["ALL"]   
+    ports:
+      - 8200:8200
+    networks:
+      - elastic
+    command: >
+       apm-server -e
+         -E apm-server.rum.enabled=true
+         -E setup.kibana.host=kibana:5601
+         -E setup.template.settings.index.number_of_replicas=0
+         -E apm-server.kibana.enabled=true
+         -E apm-server.kibana.host=kibana:5601
+         -E output.elasticsearch.hosts=["elasticsearch:9200"]
+         -E output.elasticsearch.username="elastic"
+         -E output.elasticsearch.password="somethingsecret"         
+         -E apm-server.auth.secret_token="apm-server-secret-token"
+    healthcheck:
+      interval: 10s
+      retries: 12
+      test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:8200/
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.16.0
+    container_name: es01
+    restart: unless-stopped
+    environment:
+      - bootstrap.memory_lock=true
+      - cluster.name=docker-cluster
+      - cluster.routing.allocation.disk.threshold_enabled=false
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-XX:UseAVX=2 -Xms1g -Xmx1g
+      - xpack.security.enabled=true
+      - xpack.security.audit.enabled=true
+      - xpack.security.authc.api_key.enabled=true
+      #- xpack.security.http.ssl.enabled=true
+      #- xpack.security.transport.ssl.enabled=true
+      - ELASTIC_PASSWORD=somethingsecret
+    ulimits:
+      memlock:
+        hard: -1
+        soft: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+    networks:
+      - elastic
+    healthcheck:
+      interval: 20s
+      retries: 10
+      test: curl -s http://localhost:9200/_cluster/health | grep -vq '"status":"red"'
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.16.0
+    container_name: kib01
+    restart: unless-stoppeds
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: elastic
+      ELASTICSEARCH_PASSWORD: somethingsecret
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: aea5dca966129a3f874e5f0de6aef4d8
+      XPACK_REPORTING_ENCRYPTIONKEY: 9385495746e2846bcddf94ec3c451ddf
+      XPACK_SECURITY_ENCRYPTIONKEY: dfabcad10986e1250e347c2252687cd5
+    ports:
+      - 5601:5601
+    networks:
+      - elastic
+    healthcheck:
+      interval: 10s
+      retries: 20
+      test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:5601/api/status
+
+volumes:
+  esdata:
+    driver: local
+
+networks:
+  elastic:
+    driver: bridge
